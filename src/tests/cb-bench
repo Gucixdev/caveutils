@@ -1,0 +1,63 @@
+#!/bin/sh
+# cb-bench - copy -> paste latency through the cb daemon's Unix socket, against the fake ext-data-control compositor:
+# a small text, 1 MB and 10 MB (stdin copy, then paste into a file). Prints ms per round trip and checks the bytes
+# came back identical, up to cb's own limit: an entry is cut at 64 KiB (CLIP_MAX_LEN, fixed ring, no allocation),
+# so 1 MB and 10 MB report how much was kept. Never touches the real clipboard or compositor. Needs wayland-scanner + libwayland-server.
+#   BIN=/path/to/bin sh tests/cb-bench
+cd "$(dirname "$0")/.." || exit 1
+SRC=$PWD
+BIN=${BIN:-$PWD/bin}
+[ -x "$BIN/cb" ] || { echo "build first: make"; exit 1; }
+command -v wayland-scanner > /dev/null || { echo "cb-bench: no wayland-scanner, skipped"; exit 0; }
+T=$(mktemp -d) || exit 1
+cleanup() {
+	for p in $(pgrep -u "$(id -u)" -f "$BIN/cb"); do
+		grep -qa "XDG_RUNTIME_DIR=$T/xdg" "/proc/$p/environ" 2> /dev/null && kill "$p" 2> /dev/null
+	done
+	kill $COMP 2> /dev/null
+	find "$T" -delete
+}
+trap cleanup EXIT INT TERM
+mkdir -p "$T/xdg" "$T/gen" && chmod 700 "$T/xdg"
+export XDG_RUNTIME_DIR=$T/xdg WAYLAND_DISPLAY=cb-fake
+unset CB_BACKEND DISPLAY
+X=${EXT_XML:-/usr/share/wayland-protocols/staging/ext-data-control/ext-data-control-v1.xml}
+H=ext-data-control-v1
+wayland-scanner server-header "$X" "$T/gen/$H-server-protocol.h" &&
+wayland-scanner private-code "$X" "$T/gen/$H-protocol.c" &&
+cc -w -I"$T/gen" -o "$T/fc" "$SRC/tests/cb-fakecomp.c" "$T/gen/$H-protocol.c" -lwayland-server \
+	|| { echo "cb-bench: cannot build the fake compositor, skipped"; exit 0; }
+mkfifo "$T/in"; exec 3<> "$T/in"
+: > "$T/out"
+"$T/fc" cb-fake < "$T/in" >> "$T/out" &
+COMP=$!
+i=0; while [ $i -lt 40 ] && ! grep -q READY "$T/out"; do sleep 0.1; i=$((i + 1)); done
+"$BIN/cb" copy warmup > /dev/null	# starts the daemon, so the timings below are warm round trips
+
+now() { date +%s%N; }
+status=0
+for kb in 0 60 1024 10240; do
+	if [ $kb = 0 ]; then printf 'short text\n' > "$T/src"; else head -c $((kb * 1024)) /dev/zero | tr '\0' 'x' > "$T/src"; fi
+	best=
+	for _ in 1 2 3; do
+		a=$(now)
+		"$BIN/cb" copy < "$T/src"
+		"$BIN/cb" paste > "$T/dst"
+		b=$(now)
+		ms=$(((b - a) / 1000000))
+		[ -z "$best" ] || [ "$ms" -lt "$best" ] && best=$ms
+	done
+	label="$kb KB"; [ $kb = 0 ] && label="short text"
+	size=$(wc -c < "$T/src") got=$(wc -c < "$T/dst")
+	kept=$got; [ "$kept" -gt "$size" ] && kept=$size	# paste may add one trailing newline
+	[ "$size" -gt 65535 ] && [ "$kept" -gt 65535 ] && kept=65535
+	if ! cmp -s -n "$kept" "$T/src" "$T/dst"; then r="DIFFERENT (first $kept bytes)"; status=1
+	elif [ "$kept" -lt "$size" ] && [ "$kept" -lt 65535 ]; then r="SHORT ($kept of $size bytes, below the limit)"; status=1
+	elif [ "$kept" -lt "$size" ]; then r="cut to $kept of $size bytes (cb limit 64 KiB)"
+	else r="all $size bytes same"; fi
+	printf 'cb-bench %-10s copy+paste %6d ms (best of 3)  %s\n' "$label" "$best" "$r"
+done
+tell() { echo "$1" >&3; }
+tell quit; exec 3>&-
+wait $COMP 2> /dev/null
+exit $status

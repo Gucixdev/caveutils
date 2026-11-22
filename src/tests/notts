@@ -1,0 +1,99 @@
+#!/bin/sh
+# notts tests under a private session bus and a local stand-in for Discord and Telegram (nothing leaves the machine).
+# Needs dbus-daemon, curl and python3; skips (exit 0) without them.
+#   BIN=/path/to/bin sh tests/notts
+cd "$(dirname "$0")/.." || exit 1
+BIN=${BIN:-$PWD/bin}
+[ -x "$BIN/notts" ] || { echo "build first: make"; exit 1; }
+for c in dbus-daemon curl python3; do
+	command -v $c > /dev/null || { echo "notts tests: need $c, skipped"; exit 0; }
+done
+
+T=$(mktemp -d) || exit 1
+cleanup() { [ -n "$DPID" ] && kill $DPID 2> /dev/null; [ -n "$BPID" ] && kill $BPID 2> /dev/null; [ -n "$SPID" ] && kill $SPID 2> /dev/null; rm -rf "$T"; }
+trap cleanup EXIT INT TERM
+mkdir -p "$T/home" "$T/cfg/notts" "$T/state" "$T/xdg" "$T/bin" && chmod 700 "$T/xdg"
+pass=0 fail=0
+ok()  { pass=$((pass + 1)); }
+bad() { fail=$((fail + 1)); printf 'FAIL  %s\n' "$1"; [ -n "$2" ] && printf '      %s\n' "$2"; }
+has() { if grep -qF -- "$2" "$3" 2> /dev/null; then ok; else bad "$1" "no [$2] in $3: $(cat "$3" 2> /dev/null | head -c 300)"; fi; }
+hasnt() { if grep -qF -- "$2" "$3" 2> /dev/null; then bad "$1" "[$2] found in $3"; else ok; fi; }
+
+# the stand-in server: logs "METHOD PATH" and the body of every request
+cat > "$T/srv.py" <<'PY'
+import http.server, sys
+log = sys.argv[1]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers.get("Content-Length", 0))).decode()
+        with open(log, "a") as f:
+            f.write("%s %s %s | %s\n" % (self.command, self.path, self.headers.get("Content-Type"), body))
+        self.send_response(200); self.end_headers(); self.wfile.write(b"{}")
+    def log_message(self, *a): pass
+s = http.server.HTTPServer(("127.0.0.1", 0), H)
+open(sys.argv[2], "w").write(str(s.server_address[1]))
+s.serve_forever()
+PY
+python3 "$T/srv.py" "$T/requests" "$T/port" & SPID=$!
+i=0; while [ ! -s "$T/port" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+PORT=$(cat "$T/port") || exit 1
+
+# curl wrapper: records its argv, then runs the real one (stdin is passed on)
+REAL=$(command -v curl)
+printf '#!/bin/sh\nprintf "%%s\\n" "$@" >> "%s/argv"\nexec %s "$@"\n' "$T" "$REAL" > "$T/bin/curl"
+chmod +x "$T/bin/curl"
+
+cat > "$T/home/.secrets" <<SEC
+# secrets of this test
+HOOK_URL=http://127.0.0.1:$PORT/hook/SECRETHOOK
+export TG_TOKEN="123:SECRETTOKEN"
+TG_CHAT=42
+SEC
+cat > "$T/cfg/notts/config" <<CFG
+discord @HOOK_URL
+telegram @TG_TOKEN @TG_CHAT http://127.0.0.1:$PORT
+ignore noisy
+CFG
+
+export HOME=$T/home XDG_CONFIG_HOME=$T/cfg XDG_STATE_HOME=$T/state XDG_RUNTIME_DIR=$T/xdg
+export PATH=$T/bin:$PATH
+dbus-daemon --session --address="unix:path=$T/bus" --nofork --nopidfile > /dev/null 2>&1 & DPID=$!
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$T/bus"
+i=0; while [ ! -S "$T/bus" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+"$BIN/notts" > "$T/daemon.log" 2>&1 & BPID=$!
+sleep 0.5
+
+id=$("$BIN/notts" send -a testapp 'He said "hi"' 'line\two' 2> "$T/send.err")
+[ -n "$id" ] && ok || bad "send prints an id" "$(cat "$T/send.err")"
+sleep 1
+has "discord: path"    "POST /hook/SECRETHOOK application/json" "$T/requests"
+has "discord: json"    '{"content":"testapp: He said \"hi\" - line\\two"}' "$T/requests"
+has "telegram: path"   "POST /bot123:SECRETTOKEN/sendMessage application/x-www-form-urlencoded" "$T/requests"
+has "telegram: chat"   "chat_id=42" "$T/requests"
+has "telegram: text"   "text=testapp%3A+He+said+%22hi%22" "$T/requests"
+hasnt "secrets are not in curl's argv (token)" "SECRETTOKEN" "$T/argv"
+hasnt "secrets are not in curl's argv (hook)"  "SECRETHOOK"  "$T/argv"
+has "history logged"   "He said \"hi\"" "$XDG_STATE_HOME/notts/history"
+
+n=$(wc -l < "$T/requests")
+"$BIN/notts" send -a noisy 'ignored one' > /dev/null 2>&1; sleep 0.7
+same_n=$(wc -l < "$T/requests")
+if [ "$n" = "$same_n" ]; then ok; else bad "ignored app sends nothing" "$n -> $same_n requests"; fi
+
+"$BIN/notts" dnd on
+"$BIN/notts" send -a testapp 'quiet one' > /dev/null 2>&1; sleep 0.7
+hasnt "dnd: normal is not forwarded" "quiet" "$T/requests"
+"$BIN/notts" send -u critical -a testapp 'loud one' > /dev/null 2>&1; sleep 1
+has "dnd: critical passes" "loud" "$T/requests"
+"$BIN/notts" dnd off
+
+# an unresolvable @NAME is reported (the first daemon has to give up the name first)
+kill $BPID; wait $BPID 2> /dev/null; BPID=
+mkdir -p "$T/cfg2/notts"
+printf 'discord @NOT_SET_ANYWHERE\n' > "$T/cfg2/notts/config"
+XDG_CONFIG_HOME=$T/cfg2 "$BIN/notts" > "$T/daemon2.log" 2>&1 < /dev/null & BPID=$!
+sleep 0.7
+has "missing secret is reported" "NOT_SET_ANYWHERE not found" "$T/daemon2.log"
+
+printf 'notts: %d passed, %d failed\n' $pass $fail
+[ $fail -eq 0 ]
