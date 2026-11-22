@@ -34,7 +34,9 @@ PATH=/nonexistent $BIN pick >/dev/null 2>&1 </dev/null; [ $? -eq 1 ] && ok || ba
 mkdir "$T/bin"; printf '#!/bin/sh\nhead -1\n' > "$T/bin/fzf"; chmod +x "$T/bin/fzf"
 P=$(PATH="$T/bin:$PATH" $BIN pick); [ "$P" = "git reset --soft HEAD~1" ] && ok || bad "pick prints the command ($P)"
 P=$(PATH="$T/bin:$PATH" $BIN pick -t tar </dev/null); [ "$P" = "tar xzf <file> -C /tmp" ] || [ "$P" = "tar xzf  -C /tmp" ] && ok || bad "placeholders without a terminal use defaults ($P)"
-P=$(PATH="$T/bin:$PATH" $BIN run -t git); [ $? -eq 0 ] && ok || bad "run"
+# run executes the snippet, so it gets a throwaway repo instead of the one the tests live in
+mkdir "$T/repo"; ( cd "$T/repo" && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m a && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m b )
+P=$(cd "$T/repo" && PATH="$T/bin:$PATH" $BIN run -t git); [ $? -eq 0 ] && ok || bad "run"
 printf '#!/bin/sh\nexit 130\n' > "$T/bin/fzf"
 PATH="$T/bin:$PATH" $BIN pick >/dev/null 2>&1; [ $? -eq 1 ] && ok || bad "cancelled pick exits 1"
 

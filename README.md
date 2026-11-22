@@ -1,4 +1,4 @@
-# notcoreutils
+# caveutils
 
 Twelve small command-line tools, one C source file and one man page each. Things GNU coreutils
 already does well are deliberately not reimplemented here.
@@ -9,8 +9,8 @@ already does well are deliberately not reimplemented here.
 | `cloc` | counts lines of code per language: `cloc [--table \| --files] [ROOT]` |
 | `colorado` | stdin colorizer for log-level words, quoted strings, IPv4 addresses and numbers (the idea of grc/ccze, no config file) |
 | `dv` | disk view: sizes a directory recursively and prints the biggest entries first (a non-interactive slice of ncdu) |
-| `fzf` | fuzzy finder compatible with fzf 0.74's command line, in one file; see [fzf.md](fzf.md) |
-| `gtop` | system monitor TUI (CPU/GPU, RAM, disk, net, processes); its palette commands are in `share/gtop/commands`; see [gtop.md](gtop.md) |
+| `fzf` | fuzzy finder compatible with fzf 0.74's command line, in one file; see [fzf.md](docs/fzf.md) |
+| `gtop` | system monitor TUI (CPU/GPU, RAM, disk, net, processes); its palette commands are in `share/gtop/commands`; see [gtop.md](docs/gtop.md) |
 | `man` | minimal manual-page viewer: finds the page under `$MANPATH` or the FHS paths, gunzips, renders the common troff macros as readable text |
 | `netcat` | minimal TCP pipe: `netcat HOST PORT` connects, `netcat -l PORT` listens for one connection, stdin/stdout both ways |
 | `snip` | command snippet manager with tags in the spirit of pet: `snip add -t git -d "undo" CMD`, pick with fzf, `<param=default>` placeholders, a shell key (Ctrl-X s) that pastes a snippet into the line you are typing |
@@ -27,4 +27,4 @@ make install      # PREFIX=/usr/local: binaries and man pages
 ```
 
 C standard: `-std=gnu11 -D_GNU_SOURCE -U_FORTIFY_SOURCE` (see the Makefile). The tools share a
-handful of single-file headers from `deps/` (the same family as [`../base`](../base), kept as their own copies so this directory builds on its own).
+handful of single-file headers from `deps/`, so the tree builds on its own.

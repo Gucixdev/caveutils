@@ -1,4 +1,4 @@
-# notcoreutils - small tools that have no GNU counterpart (or do something
+# caveutils - small tools that have no GNU counterpart (or do something
 # different from it). One file each, built to bin/NAME.
 #
 #   make              build everything
@@ -49,8 +49,8 @@ $(OUT):
 	mkdir -p $(OUT)
 
 define tool
-$(OUT)/$(1): $(1).c $$(SRC_$(1)) | $(OUT)
-	$$(CC) $$(CSTD) $$(CFLAGS) -w $$(INC) $$(INC_$(1)) -o $$@ $(1).c $$(filter %.c,$$(SRC_$(1))) $$(LIBS_$(1))
+$(OUT)/$(1): src/$(1).c $$(SRC_$(1)) | $(OUT)
+	$$(CC) $$(CSTD) $$(CFLAGS) -w $$(INC) $$(INC_$(1)) -o $$@ src/$(1).c $$(filter %.c,$$(SRC_$(1))) $$(LIBS_$(1))
 .PHONY: $(1)
 $(1): $(OUT)/$(1)
 endef
@@ -62,7 +62,7 @@ test: all
 install: all
 	mkdir -p $(DESTDIR)$(PREFIX)/bin $(DESTDIR)$(PREFIX)/share/man/man1
 	for t in $(TOOLS); do install -m 755 $(OUT)/$$t $(DESTDIR)$(PREFIX)/bin/$$t; done
-	for t in $(TOOLS); do [ -f $$t.1 ] && install -m 644 $$t.1 $(DESTDIR)$(PREFIX)/share/man/man1/$$t.1; done; true
+	for t in $(TOOLS); do [ -f manpages/$$t.1 ] && install -m 644 manpages/$$t.1 $(DESTDIR)$(PREFIX)/share/man/man1/$$t.1; done; true
 	mkdir -p $(DESTDIR)$(PREFIX)/share/gtop/commands
 	install -m 755 share/gtop/commands/* $(DESTDIR)$(PREFIX)/share/gtop/commands/
 	@echo "sudo was installed WITHOUT the setuid bit; add it yourself if you mean to use it"
